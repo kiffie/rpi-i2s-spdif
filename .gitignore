@@ -1,3 +1,11 @@
+# Files related to kernel module build process
+*.o.cmd
+*.ko.cmd
+*.mod.c
+modules.order
+Module.symvers
+.tmp_versions
+
 # Object files
 *.o
 *.ko
