@@ -24,7 +24,7 @@ Second, a 100 nF capacitor should be connected between the PCM_DOUT pin and the 
 
 ![RPi Mod Bottom](https://raw.githubusercontent.com/kiffie/rpi-i2s-spdif/master/doc/rpi_mod_bottom.jpg)
 
-Instead of performing this modification, an optical transmitter module can be connected to the PCM_DOUT pin in order connect the Raspberry Pi with a optical fiber.
+Instead of performing this modification, an optical transmitter module can be connected to the PCM_DOUT pin in order connect the Raspberry Pi to an optical fiber.
 
 ## Status
 
