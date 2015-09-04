@@ -28,7 +28,7 @@ Instead of performing this modification, an optical transmitter module can be co
 
 ## Status
 
-The driver works on a Raspberry Pi Model B having the P5 header when connected to a simple audio DAC with an S/PDIF input. Not clear if more complex devices like AV receivers expect the sub code be present in the S/PDIF stream.
+The driver works on a Raspberry Pi Model B (with P5 header) when connected to a simple audio DAC with an S/PDIF input. Not clear if more complex devices like AV receivers expect the sub code be present in the S/PDIF stream.
 
 Adaptation of the driver to the newer models having a 40 pin IO connector should be possible. It appears that the I2S interface is still available but the driver software must probably map it to different GPIO pins. The 40 pin header has GPIO21 available on pin 40. Thus, PCM_DOUT shoule be mapped to GPIO21 (rather than GPIO31) for the newer models.
 
