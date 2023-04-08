@@ -164,9 +164,7 @@ static const unsigned int bcm2708_clk_freq[BCM2708_CLK_SRC_HDMI+1] = {
 #define BCM2708_I2S_INT_TXW		BIT(0)
 
 /* I2S DMA interface */
-#define BCM2708_I2S_FIFO_PHYSICAL_ADDR	0x7E203004
-#define BCM2708_DMA_DREQ_PCM_TX		2
-#define BCM2708_DMA_DREQ_PCM_RX		3
+#define BCM2708_I2S_FIFO_PHYSICAL_ADDR	0x7E203004 // TODO: remove this
 
 /* logging and debugging */
 #define dprintk(mask, fmt, arg...) do { \
@@ -201,7 +199,7 @@ struct bcm2708_i2s_dev {
 	//unsigned int bclk_ratio;
 
 	struct regmap *i2s_regmap;
-	struct regmap *clk_regmap;
+	struct clk *clk;
 
 	struct dma_chan *i2s_dma;
 	dma_cookie_t i2s_dma_cookie;
@@ -520,185 +518,79 @@ static bool bcm2708_i2s_precious_reg(struct device *dev, unsigned int reg)
 	};
 }
 
-static bool bcm2708_clk_volatile_reg(struct device *dev, unsigned int reg)
-{
-	switch (reg) {
-	case BCM2708_CLK_PCMCTL_REG:
-		return true;
-	default:
-		return false;
-	};
-}
-
-static const struct regmap_config bcm2708_regmap_config[] = {
-	{
-		.reg_bits = 32,
-		.reg_stride = 4,
-		.val_bits = 32,
-		.max_register = BCM2708_I2S_GRAY_REG,
-		.precious_reg = bcm2708_i2s_precious_reg,
-		.volatile_reg = bcm2708_i2s_volatile_reg,
-		.cache_type = REGCACHE_RBTREE,
-	},
-	{
-		.reg_bits = 32,
-		.reg_stride = 4,
-		.val_bits = 32,
-		.max_register = BCM2708_CLK_PCMDIV_REG,
-		.volatile_reg = bcm2708_clk_volatile_reg,
-		.cache_type = REGCACHE_RBTREE,
-	},
+static const struct regmap_config bcm2708_regmap_config = {
+	.reg_bits = 32,
+	.reg_stride = 4,
+	.val_bits = 32,
+	.max_register = BCM2708_I2S_GRAY_REG,
+	.precious_reg = bcm2708_i2s_precious_reg,
+	.volatile_reg = bcm2708_i2s_volatile_reg,
+	.cache_type = REGCACHE_RBTREE,
 };
-
-static const struct snd_soc_component_driver bcm2708_i2s_component = {
-	.name		= "bcm2708-i2s-comp",
-};
-
-
-static void bcm2708_i2s_setup_gpio(void)
-{
-	/*
-	 * This is the common way to handle the GPIO pins for
-	 * the Raspberry Pi.
-	 * TODO Better way would be to handle
-	 * this in the device tree!
-	 */
-#define INP_GPIO(g) *(gpio+((g)/10)) &= ~(7<<(((g)%10)*3))
-#define SET_GPIO_ALT(g,a) *(gpio+(((g)/10))) |= (((a)<=3?(a)+4:(a)==4?3:2)<<(((g)%10)*3))
-
-	unsigned int *gpio;
-	int pin;
-	gpio = ioremap(GPIO_BASE, SZ_16K);
-
-	for (pin = 28; pin <= 31; pin++) {
-		INP_GPIO(pin);		/* set mode to GPIO input first */
-		SET_GPIO_ALT(pin, 2);	/* set mode to ALT 0 */
-	}
-#undef INP_GPIO
-#undef SET_GPIO_ALT
-}
-
 
 static void bcm_2708_i2s_init_clock(struct bcm2708_i2s_dev *dev,
-				    unsigned target_frequency)
+				    unsigned bclk_rate)
 {
-	/*
-	 * Clock Settings
-	 *
-	 * The target frequency of the bit clock is
-	 *	sampling rate * frame length
-	 *
-	 * Integer mode:
-	 * Sampling rates that are multiples of 8000 kHz
-	 * can be driven by the oscillator of 19.2 MHz
-	 * with an integer divider as long as the frame length
-	 * is an integer divider of 19200000/8000=2400 as set up above.
-	 * This is no longer possible if the sampling rate
-	 * is too high (e.g. 192 kHz), because the oscillator is too slow.
-	 *
-	 * MASH mode:
-	 * For all other sampling rates, it is not possible to
-	 * have an integer divider. Approximate the clock
-	 * with the MASH module that induces a slight frequency
-	 * variance. To minimize that it is best to have the fastest
-	 * clock here. That is PLLD with 500 MHz.
-	 */
-	unsigned divi, divf;
-	int clk_src = BCM2708_CLK_SRC_OSC;
-	unsigned mash = BCM2708_CLK_MASH_0;
-
-	if (bcm2708_clk_freq[clk_src] % target_frequency == 0) {
-		divi = bcm2708_clk_freq[clk_src] / target_frequency;
-		divf = 0;
-	} else {
-		uint64_t dividend;
-		clk_src = BCM2708_CLK_SRC_PLLD;
-		mash = BCM2708_CLK_MASH_1;
-
-		dividend = bcm2708_clk_freq[clk_src];
-		dividend <<= BCM2708_CLK_SHIFT;
-		do_div(dividend, target_frequency);
-		divi = dividend >> BCM2708_CLK_SHIFT;
-		divf = dividend & BCM2708_CLK_DIVF_MASK;
-	}
-
-	/* Set clock divider */
-	regmap_write(dev->clk_regmap, BCM2708_CLK_PCMDIV_REG, BCM2708_CLK_PASSWD
-			| BCM2708_CLK_DIVI(divi)
-			| BCM2708_CLK_DIVF(divf));
-
-	/* Setup clock and start it */
-	regmap_write(dev->clk_regmap, BCM2708_CLK_PCMCTL_REG,
-			BCM2708_CLK_PASSWD
-			| BCM2708_CLK_ENAB
-			| BCM2708_CLK_MASH(mash)
-			| BCM2708_CLK_SRC(clk_src));
+	if (clk_set_rate(dev->clk, bclk_rate) != 0)
+		dev_err(dev->dev, "cannot set clock rate to %u\n", bclk_rate);
+	if (clk_prepare_enable(dev->clk) != 0)
+		dev_err(dev->dev, "cannot enable clock\n");
 }
 
 static int bcm2708_i2s_probe(struct platform_device *pdev)
 {
 	struct bcm2708_i2s_dev *dev;
-	int i;
 	int ret;
-	struct regmap *regmap[2];
-	struct resource *mem[2];
+	void __iomem *base;
 	unsigned syncval, csreg, txcreg;
 	int timeout;
 	dma_cap_mask_t mask;
 	struct dma_slave_config slave_config;
 
-	/* Request both ioareas */
-	for (i = 0; i <= 1; i++) {
-		void __iomem *base;
-
-		mem[i] = platform_get_resource(pdev, IORESOURCE_MEM, i);
-		base = devm_ioremap_resource(&pdev->dev, mem[i]);
-		if (IS_ERR(base))
-			return PTR_ERR(base);
-
-		regmap[i] = devm_regmap_init_mmio(&pdev->dev, base,
-					    &bcm2708_regmap_config[i]);
-		if (IS_ERR(regmap[i])) {
-			dev_err(&pdev->dev, "I2S probe: regmap init failed\n");
-			return PTR_ERR(regmap[i]);
-		}
-	}
-
 	dev = devm_kzalloc(&pdev->dev, sizeof(*dev),
 			   GFP_KERNEL);
-	if ( dev==NULL )
+	if (dev == NULL)
 		return -ENOMEM;
-
-	spin_lock_init(&dev->lock);
-	dev->spdif_buffer= dma_alloc_coherent(
-		dev->dev,
-		SPDIF_FRAMESIZE*SPDIF_BUFSIZE_FRAMES,
-		&dev->spdif_buffer_handle,
-		GFP_KERNEL);
-	if( dev->spdif_buffer==NULL ){
-		dev_err(&pdev->dev, "cannot allocate DMA memory.\n");
-		ret= -ENOMEM;
-		goto out_devm_kzalloc;
-	}
-
-	spdif_init(&dev->spdif);
-	bcm2708_i2s_setup_gpio();
-
-	dev->i2s_regmap = regmap[0];
-	dev->clk_regmap = regmap[1];
-
-	/* BCLK ratio - use default */
-	/* dev->bclk_ratio = 0; */
 
 	/* Store the pdev */
 	dev->dev = &pdev->dev;
 	dev_set_drvdata(&pdev->dev, dev);
 
+	/* get the clock */
+	dev->clk = devm_clk_get(&pdev->dev, NULL);
+	if (IS_ERR(dev->clk))
+		return dev_err_probe(&pdev->dev, PTR_ERR(dev->clk),
+				     "could not get clk\n");
+
+	/* Request ioarea */
+	base = devm_platform_ioremap_resource(pdev, 0);
+	if (IS_ERR(base))
+		return PTR_ERR(base);
+
+	dev->i2s_regmap = devm_regmap_init_mmio(&pdev->dev, base,
+				&bcm2708_regmap_config);
+	if (IS_ERR(dev->i2s_regmap))
+		return PTR_ERR(dev->i2s_regmap);
+
+	spin_lock_init(&dev->lock);
+	dev->spdif_buffer = dma_alloc_coherent(
+		dev->dev,
+		SPDIF_FRAMESIZE*SPDIF_BUFSIZE_FRAMES,
+		&dev->spdif_buffer_handle,
+		GFP_KERNEL);
+	if (dev->spdif_buffer == NULL) {
+		dev_err(&pdev->dev, "cannot allocate DMA memory.\n");
+		ret = -ENOMEM;
+		goto out_devm_kzalloc;
+	}
+
+	spdif_init(&dev->spdif);
+
 	/* get DMA channel */
 	dma_cap_zero(mask);
 	dma_cap_set(DMA_SLAVE, mask);
 	dma_cap_set(DMA_CYCLIC, mask);
-	dev->i2s_dma= dma_request_channel(mask, NULL, NULL);
+	dev->i2s_dma = dma_request_slave_channel_compat(mask, NULL, NULL, &pdev->dev, "tx");
 	if( dev->i2s_dma == NULL  ){
 		dev_err(&pdev->dev,
 		        "Could not request DMA channel. "
@@ -714,8 +606,11 @@ static int bcm2708_i2s_probe(struct platform_device *pdev)
 	slave_config.dst_addr_width= DMA_SLAVE_BUSWIDTH_4_BYTES;
 	slave_config.src_maxburst= 2;
 	slave_config.dst_maxburst= 2;
-	slave_config.device_fc= 0;
-	slave_config.slave_id= BCM2708_DMA_DREQ_PCM_TX;
+	slave_config.src_port_window_size = 0;
+	slave_config.dst_port_window_size = 0;
+	slave_config.device_fc = 0;
+	slave_config.peripheral_config = NULL;
+	slave_config.peripheral_size = 0;
 	ret= dmaengine_slave_config(dev->i2s_dma, &slave_config);
 	if( ret < 0 ){
 		dev_err(&pdev->dev,
@@ -725,7 +620,7 @@ static int bcm2708_i2s_probe(struct platform_device *pdev)
 
 	/*
 	 * register ALSA driver
-         */
+	*/
 	ret= snd_card_new(&pdev->dev, SNDRV_DEFAULT_IDX1, "RpiSpdif",
 			  THIS_MODULE, 0, &dev->card);
 	if( ret<0 ){
@@ -753,18 +648,12 @@ static int bcm2708_i2s_probe(struct platform_device *pdev)
 			SNDRV_PCM_STREAM_PLAYBACK,
 			&bcm2708_i2s_pcm_ops);
 
-	ret= snd_pcm_lib_preallocate_pages_for_all(
+	snd_pcm_lib_preallocate_pages_for_all(
 		dev->pcm,
 		SNDRV_DMA_TYPE_CONTINUOUS,
-		snd_dma_continuous_data(GFP_KERNEL),
+		NULL,
 		BUFSIZE_FRAMES*PCM_FRAMESIZE, BUFSIZE_FRAMES*PCM_FRAMESIZE);
-	if( ret<0 ){
-		dev_err(&pdev->dev,
-		        "could not preallocate ALSA pages:%d\n",
-		         ret);
-		goto out_card_create;
-	}
-	ret= snd_card_register(dev->card);
+	ret = snd_card_register(dev->card);
 	if( ret<0 ){
 		dev_err(&pdev->dev, "could not register ALSA card:%d\n", ret);
 		goto out_card_create;
@@ -870,7 +759,7 @@ static int bcm2708_i2s_remove(struct platform_device *pdev)
 }
 
 static const struct of_device_id spdif_of_match[] = {
-	{ .compatible = "brcm,bcm2708-i2s" },
+	{ .compatible = "brcm,bcm2835-i2s" },
 	{}
 };
 
@@ -879,15 +768,16 @@ static struct platform_driver bcm2708_i2s_driver = {
 	.probe		= bcm2708_i2s_probe,
 	.remove		= bcm2708_i2s_remove,
 	.driver		= {
-		.name	= "bcm2708-i2s",
-		.owner	= THIS_MODULE,
+		.name	= "bcm2835-i2s",
 		.of_match_table = spdif_of_match
 	},
 };
 
 module_platform_driver(bcm2708_i2s_driver);
 
-MODULE_ALIAS("platform:bcm2708-i2s");
+MODULE_ALIAS("platform:bcm2835-i2s");
+MODULE_ALIAS("of:N*T*Cbrcm,bcm2835-i2sC*");
+MODULE_ALIAS("of:N*T*Cbrcm,bcm2835-i2s");
 MODULE_DESCRIPTION("BCM2708 I2S/SPDIF output interface");
-MODULE_AUTHOR("Kiffie van Haash<kiffie.vanhaash@gmail.com>");
+MODULE_AUTHOR("Stephan <kiffie@mailbox.org>");
 MODULE_LICENSE("GPL v2");
