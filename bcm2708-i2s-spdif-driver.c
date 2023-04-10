@@ -1,6 +1,6 @@
 /*
  * SPDIF output driver using the I2C interface and software encoding
- * Copyright (C) 2015 Kiffie van Haash <kiffie.vanhaash@gmail.com>
+ * Copyright (C) 2015, 2023 Stephan "Kiffie" <kiffie.vanhaash@gmail.com>
  *
  * Based on
  *      ALSA SoC I2S Audio Layer for Broadcom BCM2708 SoC
@@ -37,6 +37,7 @@
 
 #include <linux/init.h>
 #include <linux/module.h>
+#include <linux/of_address.h>
 #include <linux/device.h>
 #include <linux/slab.h>
 #include <linux/delay.h>
@@ -162,9 +163,6 @@ static const unsigned int bcm2708_clk_freq[BCM2708_CLK_SRC_HDMI+1] = {
 #define BCM2708_I2S_INT_TXERR		BIT(2)
 #define BCM2708_I2S_INT_RXR		BIT(1)
 #define BCM2708_I2S_INT_TXW		BIT(0)
-
-/* I2S DMA interface */
-#define BCM2708_I2S_FIFO_PHYSICAL_ADDR	0x7E203004 // TODO: remove this
 
 /* logging and debugging */
 #define dprintk(mask, fmt, arg...) do { \
@@ -546,6 +544,8 @@ static int bcm2708_i2s_probe(struct platform_device *pdev)
 	int timeout;
 	dma_cap_mask_t mask;
 	struct dma_slave_config slave_config;
+	const __be32 *addr;
+	dma_addr_t dma_base;
 
 	dev = devm_kzalloc(&pdev->dev, sizeof(*dev),
 			   GFP_KERNEL);
@@ -558,20 +558,23 @@ static int bcm2708_i2s_probe(struct platform_device *pdev)
 
 	/* get the clock */
 	dev->clk = devm_clk_get(&pdev->dev, NULL);
-	if (IS_ERR(dev->clk))
-		return dev_err_probe(&pdev->dev, PTR_ERR(dev->clk),
+	if (IS_ERR(dev->clk)) {
+		ret =  dev_err_probe(&pdev->dev, PTR_ERR(dev->clk),
 				     "could not get clk\n");
-
+		goto out_devm_kzalloc;
+	}
 	/* Request ioarea */
 	base = devm_platform_ioremap_resource(pdev, 0);
-	if (IS_ERR(base))
-		return PTR_ERR(base);
-
+	if (IS_ERR(base)) {
+		ret = PTR_ERR(base);
+		goto out_devm_kzalloc;
+	}
 	dev->i2s_regmap = devm_regmap_init_mmio(&pdev->dev, base,
 				&bcm2708_regmap_config);
-	if (IS_ERR(dev->i2s_regmap))
-		return PTR_ERR(dev->i2s_regmap);
-
+	if (IS_ERR(dev->i2s_regmap)) {
+		ret =  PTR_ERR(dev->i2s_regmap);
+		goto out_devm_kzalloc;
+	}
 	spin_lock_init(&dev->lock);
 	dev->spdif_buffer = dma_alloc_coherent(
 		dev->dev,
@@ -586,12 +589,21 @@ static int bcm2708_i2s_probe(struct platform_device *pdev)
 
 	spdif_init(&dev->spdif);
 
-	/* get DMA channel */
+	/* get the DMA address from the DT */
+	addr = of_get_address(pdev->dev.of_node, 0, NULL, NULL);
+	if (!addr) {
+		dev_err(&pdev->dev, "could not get DMA-register address\n");
+		ret = -EINVAL;
+		goto out_dma_alloc;
+	}
+	dma_base = be32_to_cpup(addr);
+
+	/* get and configure the DMA channel */
 	dma_cap_zero(mask);
 	dma_cap_set(DMA_SLAVE, mask);
 	dma_cap_set(DMA_CYCLIC, mask);
 	dev->i2s_dma = dma_request_slave_channel_compat(mask, NULL, NULL, &pdev->dev, "tx");
-	if( dev->i2s_dma == NULL  ){
+	if (dev->i2s_dma == NULL) {
 		dev_err(&pdev->dev,
 		        "Could not request DMA channel. "
                         "Check if bcm2708_dmaengine.ko is loaded");
@@ -601,7 +613,7 @@ static int bcm2708_i2s_probe(struct platform_device *pdev)
 
 	slave_config.direction= DMA_MEM_TO_DEV;
 	slave_config.src_addr= dev->spdif_buffer_handle;
-	slave_config.dst_addr= BCM2708_I2S_FIFO_PHYSICAL_ADDR;
+	slave_config.dst_addr= dma_base + BCM2708_I2S_FIFO_A_REG;
 	slave_config.src_addr_width= DMA_SLAVE_BUSWIDTH_4_BYTES;
 	slave_config.dst_addr_width= DMA_SLAVE_BUSWIDTH_4_BYTES;
 	slave_config.src_maxburst= 2;
@@ -779,5 +791,5 @@ MODULE_ALIAS("platform:bcm2835-i2s");
 MODULE_ALIAS("of:N*T*Cbrcm,bcm2835-i2sC*");
 MODULE_ALIAS("of:N*T*Cbrcm,bcm2835-i2s");
 MODULE_DESCRIPTION("BCM2708 I2S/SPDIF output interface");
-MODULE_AUTHOR("Stephan <kiffie@mailbox.org>");
+MODULE_AUTHOR("Stephan <kiffie.vanhaash@gmail.com>");
 MODULE_LICENSE("GPL v2");
