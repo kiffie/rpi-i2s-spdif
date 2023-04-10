@@ -6,15 +6,61 @@ This is a Linux kernel module that outputs an audio stream in the S/PDIF format.
 
 The code is still quite experimental. Currently, a sampling rate of 44100 Hz is supported and a resolution of 16 bits or 24 bits. No sub code is inserted into the S/PDIF stream.
 
-## Hardware
+The driver has been successfully tried on a Raspberry Pi Model B (with P5 header), Raspberry Pi Zero W and Raspberry Pi 3 Model B when connected to a simple audio DAC with an S/PDIF input. Not clear if more complex devices like AV receivers expect the sub code be present in the S/PDIF stream.
 
-Since the S/PDIF stream is generated in software, no special encoder chip is needed. Just connect a S/PDIF transmitter (electrical or optical) to the PCM_DOUT pin (Header 5, pin 6: GPIO31).
+## Installation
 
-## Using the analog video output RCA connector
+### Manual compiling and installing
 
-As shown below, the Raspberry Pi can be modified to reuse the analog video connector as an electrical S/PDIF output.
+The module can be compiled (either on the PC or on the RPI) using the Makefile after adapting the path to the kernel headers.
 
-First, I have cut off the PCB track between the center connector and the Soc.
+The compiled module `bcm2708-i2s-spdif.ko` may be copied e.g. to `/lib/modules/$(uname -r)/updates/bcm2708-i2s-spdif.ko`. The original driver must be blacklisted. The Makefile has targets for both installing and blacklisting.
+
+In `/boot/config.txt`, the i2s part of the device tree must be enabled.
+
+```
+dtparam=i2s=on
+```
+
+The above steps can be done like so:
+
+```sh
+sudo apt install raspberrypi-kernel-headers
+make
+sudo make install
+sudo make blacklist
+sudo vi /boot/config.txt # edit to enable i2s
+sudo reboot
+```
+
+### DKMS
+
+The module can be intalled with DKMS, too. The following commands must be executed from a root shell.
+
+```sh
+apt install dkms raspberrypi-kernel-headers
+cd /usr/src
+git clone https://github.com/kiffie/rpi-i2s-spdif.git rpi_i2s_spdif-1
+dkms install rpi_i2s_spdif/1
+vi /boot/config.txt # edit to enable i2s
+# blacklist the original driver
+echo "blacklist snd_soc_bcm2835_i2s" > /etc/modprobe.d/blacklist-snd_soc_bcm2835_i2s.conf
+```
+
+## Pinout
+
+Since the S/PDIF stream is generated in software, no special encoder chip is needed. Just connect an S/PDIF transmitter (electrical or optical) to the PCM_DOUT pin.
+
+| Model | SPDIF output pin |
+|-|-|
+| Raspberry Pi 1 Model B <br> (28-pin header + P5 header) | header P5, pin 6: GPIO 31 |
+| Raspberry Pi 1 Model B+ and later <br> (40-pin header) | pin 40: GPIO 21|
+
+## Hardware hack for Pi 1 Model B: using the analog video output RCA connector
+
+As shown below, old models of the Raspberry Pi can be modified to reuse the analog video connector as an electrical S/PDIF output.
+
+First, I cut off the PCB track between the center connector and the Soc.
 
 ![RPi Mod Top](https://raw.githubusercontent.com/kiffie/rpi-i2s-spdif/master/doc/rpi_mod_top.jpg)
 
@@ -25,17 +71,3 @@ Second, a 100 nF capacitor should be connected between the PCM_DOUT pin and the 
 ![RPi Mod Bottom](https://raw.githubusercontent.com/kiffie/rpi-i2s-spdif/master/doc/rpi_mod_bottom.jpg)
 
 Instead of performing this modification, an optical transmitter module can be connected to the PCM_DOUT pin in order connect the Raspberry Pi to an optical fiber.
-
-## Status
-
-The driver works on a Raspberry Pi Model B (with P5 header) when connected to a simple audio DAC with an S/PDIF input. Not clear if more complex devices like AV receivers expect the sub code be present in the S/PDIF stream.
-
-Adaptation of the driver to the newer models having a 40 pin IO connector should be possible. It appears that the I2S interface is still available but the driver software must probably map it to different GPIO pins. The 40 pin header has GPIO21 available on pin 40. Thus, PCM_DOUT shoule be mapped to GPIO21 (rather than GPIO31) for the newer models.
-
-## Installation
-
-The module can be compiled (either on the PC or on the RPI) using the Makefile after adapting the path to the kernel headers.
-
-The compiled module `bcm2708-i2s-spdif.ko` may be copied e.g. to `/lib/modules/$(uname -r)/updates/bcm2708-i2s-spdif.ko`
-
-
