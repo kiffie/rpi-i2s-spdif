@@ -1,7 +1,7 @@
 /*
  * SPDIF encoder
  *
- * Copyright (C) 2015 Kiffie van Haash <kiffie.vanhaash@gmail.com>
+ * Copyright (C) 2015, 2023 Stephan "Kiffie" <kiffie.vanhaash@gmail.com>
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -14,8 +14,9 @@
  */
 
 #include "spdif-encoder.h"
+#include <linux/string.h>
 
-static uint16_t spdif_biphase_encode(int last, uint8_t data){
+static uint16_t spdif_biphase_encode(bool last, uint8_t data){
 	int i;
 	uint16_t result=0;
 
@@ -35,7 +36,7 @@ static uint16_t spdif_biphase_encode(int last, uint8_t data){
 	return result;
 }
 
-static uint16_t spdif_preamble_encode(int last, uint8_t data){
+static uint16_t spdif_preamble_encode(bool last, uint8_t data){
 
 	uint16_t result=0;
 	int i;
@@ -71,62 +72,54 @@ static uint16_t spdif_preamble_encode(int last, uint8_t data){
 	return result;
 }
 
-static void spdif_init_bytes(struct spdif_encoder *spdif){
-	int i;
-	for(i=0; i< 256; i++){
-		spdif->first_byte[i]= spdif_preamble_encode(0, i);
-		spdif->byte[i]= spdif_biphase_encode(0, i);
-	}
-}
-
-
-static void spdif_fast_encode(struct spdif_encoder *spdif,
-			      void *encoded_buf, uint32_t subframe)
+void spdif_fast_encode(struct spdif_encoder *spdif,
+		       void *encoded_buf, uint32_t subframe)
 {
-	uint8_t *bytes= (uint8_t *)&subframe;
-	uint32_t parity, tmp;
-	uint16_t data;
-	uint16_t *encoded= (uint16_t *)encoded_buf;
+	uint32_t parity;
+	uint32_t *encoded = (uint32_t *)encoded_buf;
+	bool last;
+	uint32_t data0, data1;
 
-	tmp= (subframe & ~SPDIF_PREAMBLE_MASK)<<16; /* exclude preamble bits */
-	parity= subframe^tmp;
-	tmp= parity << 8;
-	parity^= tmp;
-	tmp= parity << 4;
-	parity^= tmp;
-	tmp= parity << 2;
-	parity^= tmp;
-	tmp= parity << 1;
-	parity^= tmp;
-	subframe|= (parity&0x80000000);
-
-	data= spdif->first_byte[bytes[0]];
-	if( spdif->last ){
-		data^= 0xffff;
+	/* add channel status bit */
+	if((spdif->channel_status[spdif->frame_ctr / 8] >> (spdif->frame_ctr % 8)) & 0x01)
+	{
+		subframe |= SPDIF_C_MASK;
 	}
-	spdif->last= data&1;
-	encoded[1]=data;
+	parity = subframe & ~SPDIF_PREAMBLE_MASK; /* exclude preamble bits */
+	parity ^= parity >> 16; /* slightly faster than calling __builtin_parity() */
+	parity ^= parity >>  8;
+	parity ^= parity >>  4;
+	parity &= 0xf;
+	parity =  0x69960000 << parity;
+	parity &= 0x80000000;
+	subframe |= parity;
+	last = spdif->last;
 
-	data= spdif->byte[bytes[1]];
-	if( spdif->last ){
-		data^= 0xffff;
+	data1 = spdif->first_byte[subframe & 0xff];
+	if(last){
+		data1^= 0xffff;
 	}
-	spdif->last= data&1;
-	encoded[0]=data;
+	last = data1&1;
 
-	data= spdif->byte[bytes[2]];
-	if( spdif->last ){
-		data^= 0xffff;
+	data0 = spdif->byte[(subframe >> 8) & 0xff];
+	if(last){
+		data0^= 0xffff;
 	}
-	spdif->last= data&1;
-	encoded[3]=data;
+	last= data0&1;
+        encoded[0] = data1 << 16 | data0;
 
-	data= spdif->byte[bytes[3]];
-	if( spdif->last ){
-		data^= 0xffff;
+	data1 = spdif->byte[(subframe >> 16) & 0xff];
+	if(last){
+		data1^= 0xffff;
 	}
-	spdif->last= data&1;
-	encoded[2]=data;
+	last = data1&1;
+
+	data0 = spdif->byte[(subframe >> 24) & 0xff];
+	if(last){
+		data0^= 0xffff;
+	}
+	spdif->last= data0&1;
+	encoded[1] = data1 << 16 | data0;
 }
 
 
@@ -147,9 +140,18 @@ void spdif_encode_frame_generic(struct spdif_encoder *spdif,
 	}
 }
 
-void spdif_init(struct spdif_encoder *spdif){
-	spdif_init_bytes(spdif);
+void spdif_encoder_init(struct spdif_encoder *spdif){
+	int i;
+	for(i=0; i< 256; i++){
+		spdif->first_byte[i]= spdif_preamble_encode(0, i);
+		spdif->byte[i]= spdif_biphase_encode(0, i);
+	}
+	spdif_encoder_set_channel_status(spdif, NULL, 0);
 }
 
-/* end of SPDIF encoder */
-
+void spdif_encoder_set_channel_status(struct spdif_encoder *spdif,
+				      const void *cs, size_t len)
+{
+	memset(spdif->channel_status, 0, SPDIF_CHSTATSIZE);
+	memcpy(spdif->channel_status, cs, len <= SPDIF_CHSTATSIZE ? len : SPDIF_CHSTATSIZE);
+}

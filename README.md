@@ -4,7 +4,7 @@
 
 This is a Linux kernel module that outputs an audio stream in the S/PDIF format. The module is an ALSA sound card driver. It includes a software encoder to generate the S/PDIF stream and uses the I2S interface present in the BCM2708 SOC to transmit the S/PDIF stream.
 
-The code is still quite experimental. Currently, a sampling rate of 44100 Hz is supported and a resolution of 16 bits or 24 bits. No sub code is inserted into the S/PDIF stream.
+The driver supports multiple sampling rates: 44100, 48000, 96000 and 192000. The channel status bits in the S/PDIF blocks are set according to the sampling rate.
 
 The driver has been successfully tried on a Raspberry Pi Model B (with P5 header), Raspberry Pi Zero W and Raspberry Pi 3 Model B when connected to a simple audio DAC with an S/PDIF input. Not clear if more complex devices like AV receivers expect the sub code be present in the S/PDIF stream.
 
