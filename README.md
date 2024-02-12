@@ -6,7 +6,7 @@ This is a Linux kernel module that outputs an audio stream in the S/PDIF format.
 
 The driver supports multiple sampling rates: 44100, 48000, 96000 and 192000. The channel status bits in the S/PDIF blocks are set according to the sampling rate.
 
-The driver has been successfully tried on a Raspberry Pi Model B (with P5 header), Raspberry Pi Zero W and Raspberry Pi 3 Model B when connected to a simple audio DAC with an S/PDIF input. Not clear if more complex devices like AV receivers expect the sub code be present in the S/PDIF stream.
+The driver has been successfully tried on a Raspberry Pi Model B (with P5 header), Raspberry Pi Zero W and Raspberry Pi 3 Model B when connected to a simple audio DAC with an S/PDIF input. The driver has been reported to work on a Raspberry Pi 1 Model B combined with a SONY STR-DB840 AV receiver.
 
 ## Installation
 
