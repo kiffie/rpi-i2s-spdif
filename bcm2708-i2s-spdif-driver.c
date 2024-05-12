@@ -281,12 +281,37 @@ static int bcm2708_hw_params(struct snd_pcm_substream *ss,
 	return res;
 }
 
-static int bcm2708_pcm_prepare(struct snd_pcm_substream *ss)
+static int bcm2708_i2s_set_rate(struct bcm2708_i2s_dev *dev, unsigned rate)
 {
 	uint8_t ch_stat[] = { SPDIF_CS0_NOT_COPYRIGHT,
 			      SPDIF_CS1_DDCONV | SPDIF_CS1_ORIGINAL,
 			      0,
 			      0 };
+
+	switch (rate) {
+		case 44100:
+			ch_stat[3] = SPDIF_CS3_44100;
+			break;
+		case 48000:
+			ch_stat[3] = SPDIF_CS3_48000;
+			break;
+		case 96000:
+			ch_stat[3] = SPDIF_CS3_96000;
+			break;
+		case 192000:
+			ch_stat[3] = SPDIF_CS3_192000;
+			break;
+		default:
+			dev_err(dev->dev, "prepare: invalid sampling rate: %u\n", rate);
+
+	}
+	spdif_encoder_set_channel_status(&dev->spdif, ch_stat, sizeof(ch_stat));
+	bcm_2708_i2s_init_clock(dev, 128 * rate);
+	return 0;
+}
+
+static int bcm2708_pcm_prepare(struct snd_pcm_substream *ss)
+{
 	struct bcm2708_i2s_dev *dev = snd_pcm_substream_chip(ss);
 	dprintk(DBG_ALSA, "pcm_prepare start ss=%p\n", ss);
 	dprintk(DBG_ALSA, "buffer size in frames: %ld\n", ss->runtime->buffer_size);
@@ -294,26 +319,7 @@ static int bcm2708_pcm_prepare(struct snd_pcm_substream *ss)
 	dprintk(DBG_ALSA, "number of periods    : %d\n",  ss->runtime->periods);
 	dprintk(DBG_ALSA, "rate                 : %d\n",  ss->runtime->rate);
 	dprintk(DBG_ALSA, "format               : %d\n",  ss->runtime->format);
-	switch (ss->runtime->rate) {
-	case 44100:
-		ch_stat[3] = SPDIF_CS3_44100;
-		break;
-	case 48000:
-		ch_stat[3] = SPDIF_CS3_48000;
-		break;
-	case 96000:
-		ch_stat[3] = SPDIF_CS3_96000;
-		break;
-	case 192000:
-		ch_stat[3] = SPDIF_CS3_192000;
-		break;
-	default:
-		dev_err(dev->dev, "prepare: invalid sampling rate: %u\n", ss->runtime->rate);
-
-	}
-	spdif_encoder_set_channel_status(&dev->spdif, ch_stat, sizeof(ch_stat));
-	bcm_2708_i2s_init_clock(dev, 128 * ss->runtime->rate);
-	return 0;
+	return bcm2708_i2s_set_rate(dev, ss->runtime->rate);
 }
 
 static int bcm2708_i2s_dmaengine_prepare_and_submit(struct bcm2708_i2s_dev *dev);
@@ -324,23 +330,15 @@ static int bcm2708_pcm_trigger(struct snd_pcm_substream *ss, int cmd)
 	int ret = 0;
 
 	switch (cmd) {
-	case SNDRV_PCM_TRIGGER_START:
-		dprintk(DBG_ALSA, "SNDRV_PCM_TRIGGER_START\n");
-		dev->pcm_pointer = 0;
-		/*regmap_update_bits(dev->i2s_regmap,
-				   BCM2708_I2S_CS_A_REG,
-				   BCM2708_I2S_TXON, BCM2708_I2S_TXON);*/
-		bcm2708_i2s_dmaengine_prepare_and_submit(dev);
-		break;
-	case SNDRV_PCM_TRIGGER_STOP:
-		dprintk(DBG_ALSA, "SNDRV_PCM_TRIGGER_STOP\n");
-		/*regmap_update_bits(dev->i2s_regmap,
-				   BCM2708_I2S_CS_A_REG,
-				   BCM2708_I2S_TXON, 0);*/
-		dmaengine_terminate_all(dev->i2s_dma);
-		break;
-	default:
-		ret = -EINVAL;
+		case SNDRV_PCM_TRIGGER_START:
+			dprintk(DBG_ALSA, "SNDRV_PCM_TRIGGER_START\n");
+			dev->pcm_pointer = 0;
+			break;
+		case SNDRV_PCM_TRIGGER_STOP:
+			dprintk(DBG_ALSA, "SNDRV_PCM_TRIGGER_STOP\n");
+			break;
+		default:
+			ret = -EINVAL;
 	}
 	return ret;
 }
@@ -469,17 +467,17 @@ static void bcm2708_i2s_dma_complete(void *arg)
 	uint8_t *dst;
 	int i;
 
-	if( dev->ss ){
+	if (dev->ss) {
 		dmaengine_tx_status(dev->i2s_dma, dev->i2s_dma_cookie, &state);
 
 		/* index of part of double buffer to fill */
-		offset= state.residue <= SPDIF_BUFSIZE/2 ? 0 : SPDIF_BUFSIZE/2;
+		offset = state.residue <= SPDIF_BUFSIZE/2 ? 0 : SPDIF_BUFSIZE/2;
 
-		src= dev->ss->dma_buffer.area;
-		src+= frames_to_bytes(dev->ss->runtime, dev->pcm_pointer);
-		dst=  dev->spdif_buffer + offset;
-		for( i=0; i< SPDIF_BUFSIZE_FRAMES/2; i++ ){
-			switch( dev->ss->runtime->format ){
+		src = dev->ss->dma_buffer.area;
+		src += frames_to_bytes(dev->ss->runtime, dev->pcm_pointer);
+		dst= dev->spdif_buffer + offset;
+		for (i=0; i< SPDIF_BUFSIZE_FRAMES/2; i++) {
+			switch (dev->ss->runtime->format) {
 				case SNDRV_PCM_FORMAT_S24_LE:
 					spdif_encode_frame_s24le(&dev->spdif, dst, src);
 					break;
@@ -487,15 +485,21 @@ static void bcm2708_i2s_dma_complete(void *arg)
 					spdif_encode_frame_s16le(&dev->spdif, dst, src);
 					break;
 			}
-			src+= frames_to_bytes(dev->ss->runtime, 1);
-			dst+= SPDIF_FRAMESIZE;
+			src += frames_to_bytes(dev->ss->runtime, 1);
+			dst += SPDIF_FRAMESIZE;
 
 		}
-		dev->pcm_pointer+= SPDIF_BUFSIZE_FRAMES/2;
-		if( dev->pcm_pointer >= dev->ss->runtime->buffer_size ){
-			dev->pcm_pointer-= dev->ss->runtime->buffer_size;
+		dev->pcm_pointer += SPDIF_BUFSIZE_FRAMES/2;
+		if (dev->pcm_pointer >= dev->ss->runtime->buffer_size) {
+			dev->pcm_pointer -= dev->ss->runtime->buffer_size;
 		}
 		snd_pcm_period_elapsed(dev->ss);
+	} else {
+		dst = dev->spdif_buffer;
+		for (i = 0; i < SPDIF_BUFSIZE_FRAMES; i++) {
+			spdif_encode_frame_zero(&dev->spdif, dst);
+			dst += SPDIF_FRAMESIZE;
+		}
 	}
 }
 
@@ -707,7 +711,7 @@ static int bcm2708_i2s_probe(struct platform_device *pdev)
 			| BCM2708_I2S_RX(0x20), 0xffffffff);
 
 	/* initialize and start the clock */
-	bcm_2708_i2s_init_clock(dev, 5644800);
+	bcm2708_i2s_set_rate(dev, 44100);
 
 	/* clear TX FIFO */
 	regmap_update_bits(dev->i2s_regmap, BCM2708_I2S_CS_A_REG,
@@ -749,14 +753,13 @@ static int bcm2708_i2s_probe(struct platform_device *pdev)
 			   BCM2708_I2S_CS_A_REG,
 			   BCM2708_I2S_TXON, BCM2708_I2S_TXON);
 
-	dev->ss= NULL;
-	/*ret= bcm2708_i2s_dmaengine_prepare_and_submit(dev);
-	if( ret < 0 ){
+	dev->ss = NULL;
+	ret = bcm2708_i2s_dmaengine_prepare_and_submit(dev);
+	if (ret < 0) {
 		dev_err(dev->dev, "could not start cyclic DMA: %d\n", ret);
 		goto out_card_create;
-	}*/
+	}
 	dprintk(DBG_INIT, "driver sucessfully initialized.\n");
-
 	return 0;
 
 out_card_create:
