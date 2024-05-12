@@ -175,9 +175,16 @@ if (debug & mask) \
 #define DBG_ALSA 0x4
 
 static unsigned int debug=DBG_INIT|DBG_IRQ|DBG_ALSA;
-/* static unsigned int debug= 0; */
 module_param(debug, int, 0644);
 MODULE_PARM_DESC(debug, "debug mask (0: no debug messages)");
+
+static bool continuous = true;
+module_param(continuous, bool, 0644);
+MODULE_PARM_DESC(continuous, "continnuous signal output");
+
+static unsigned initial_rate = 44100;
+module_param(initial_rate, uint, 0644);
+MODULE_PARM_DESC(initial_rate, "initial sample rate for continuous output signal");
 
 /* General device struct */
 
@@ -333,9 +340,16 @@ static int bcm2708_pcm_trigger(struct snd_pcm_substream *ss, int cmd)
 		case SNDRV_PCM_TRIGGER_START:
 			dprintk(DBG_ALSA, "SNDRV_PCM_TRIGGER_START\n");
 			dev->pcm_pointer = 0;
+			if (dev->i2s_dma_cookie <= 0) {
+				bcm2708_i2s_dmaengine_prepare_and_submit(dev);
+			}
 			break;
 		case SNDRV_PCM_TRIGGER_STOP:
 			dprintk(DBG_ALSA, "SNDRV_PCM_TRIGGER_STOP\n");
+			if (!continuous) {
+				dmaengine_terminate_all(dev->i2s_dma);
+				dev->i2s_dma_cookie = 0;
+			}
 			break;
 		default:
 			ret = -EINVAL;
@@ -467,16 +481,15 @@ static void bcm2708_i2s_dma_complete(void *arg)
 	uint8_t *dst;
 	int i;
 
+	dmaengine_tx_status(dev->i2s_dma, dev->i2s_dma_cookie, &state);
+	/* index of part of double buffer to fill */
+	offset = state.residue <= SPDIF_BUFSIZE/2 ? 0 : SPDIF_BUFSIZE/2;
+	dst = dev->spdif_buffer + offset;
+
 	if (dev->ss) {
-		dmaengine_tx_status(dev->i2s_dma, dev->i2s_dma_cookie, &state);
-
-		/* index of part of double buffer to fill */
-		offset = state.residue <= SPDIF_BUFSIZE/2 ? 0 : SPDIF_BUFSIZE/2;
-
 		src = dev->ss->dma_buffer.area;
 		src += frames_to_bytes(dev->ss->runtime, dev->pcm_pointer);
-		dst= dev->spdif_buffer + offset;
-		for (i=0; i< SPDIF_BUFSIZE_FRAMES/2; i++) {
+		for (i = 0; i< SPDIF_BUFSIZE_FRAMES/2; i++) {
 			switch (dev->ss->runtime->format) {
 				case SNDRV_PCM_FORMAT_S24_LE:
 					spdif_encode_frame_s24le(&dev->spdif, dst, src);
@@ -487,7 +500,6 @@ static void bcm2708_i2s_dma_complete(void *arg)
 			}
 			src += frames_to_bytes(dev->ss->runtime, 1);
 			dst += SPDIF_FRAMESIZE;
-
 		}
 		dev->pcm_pointer += SPDIF_BUFSIZE_FRAMES/2;
 		if (dev->pcm_pointer >= dev->ss->runtime->buffer_size) {
@@ -495,8 +507,7 @@ static void bcm2708_i2s_dma_complete(void *arg)
 		}
 		snd_pcm_period_elapsed(dev->ss);
 	} else {
-		dst = dev->spdif_buffer;
-		for (i = 0; i < SPDIF_BUFSIZE_FRAMES; i++) {
+		for (i = 0; i < SPDIF_BUFSIZE_FRAMES/2; i++) {
 			spdif_encode_frame_zero(&dev->spdif, dst);
 			dst += SPDIF_FRAMESIZE;
 		}
@@ -711,7 +722,7 @@ static int bcm2708_i2s_probe(struct platform_device *pdev)
 			| BCM2708_I2S_RX(0x20), 0xffffffff);
 
 	/* initialize and start the clock */
-	bcm2708_i2s_set_rate(dev, 44100);
+	bcm2708_i2s_set_rate(dev, initial_rate);
 
 	/* clear TX FIFO */
 	regmap_update_bits(dev->i2s_regmap, BCM2708_I2S_CS_A_REG,
@@ -754,10 +765,11 @@ static int bcm2708_i2s_probe(struct platform_device *pdev)
 			   BCM2708_I2S_TXON, BCM2708_I2S_TXON);
 
 	dev->ss = NULL;
-	ret = bcm2708_i2s_dmaengine_prepare_and_submit(dev);
-	if (ret < 0) {
-		dev_err(dev->dev, "could not start cyclic DMA: %d\n", ret);
-		goto out_card_create;
+	if (continuous) {
+		if (bcm2708_i2s_dmaengine_prepare_and_submit(dev) < 0) {
+			dev_err(dev->dev, "could not start cyclic DMA: %d\n", ret);
+			goto out_card_create;
+		}
 	}
 	dprintk(DBG_INIT, "driver sucessfully initialized.\n");
 	return 0;
