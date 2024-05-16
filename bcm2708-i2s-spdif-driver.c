@@ -178,7 +178,7 @@ static unsigned int debug=DBG_INIT|DBG_IRQ|DBG_ALSA;
 module_param(debug, int, 0644);
 MODULE_PARM_DESC(debug, "debug mask (0: no debug messages)");
 
-static bool continuous = true;
+static bool continuous = false;
 module_param(continuous, bool, 0644);
 MODULE_PARM_DESC(continuous, "continnuous signal output");
 

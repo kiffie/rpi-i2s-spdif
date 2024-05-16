@@ -56,6 +56,22 @@ Since the S/PDIF stream is generated in software, no special encoder chip is nee
 | Raspberry Pi 1 Model B <br> (28-pin header + P5 header) | header P5, pin 6: GPIO 31 |
 | Raspberry Pi 1 Model B+ and later <br> (40-pin header) | pin 40: GPIO 21|
 
+## Continuous SPDIF signal output
+
+There are module parameters to control whether an SPDIF signal containing zero
+samples (silence) is outputted when there is no ALSA audio stream (continuous
+SPDIF signal).
+
+| Parameter | Default | Description |
+|-|-|-|
+| continuous | N | Enable continuous SPDIF signal output. Modifications of this parameter via the /sys file system will have an effect the next time when an ASLA stream is stopped. |
+| initial_rate | 44100 | Sample rate of the continuous SPDIF signal after loading the module before the first ALSA stream is outputted. Modification of this parameter via the /sys filesystem does not have an effect. |
+
+The sample rate of the continuous SPDIF signal corresponds to the sample rate of the previously outputted ALSA stream.
+
+An example configuration is in file `bcm2708-i2s-spdif.conf`, which can be
+copied to `/etc/modprobe.d`.
+
 ## Hardware hack for Pi 1 Model B: using the analog video output RCA connector
 
 As shown below, old models of the Raspberry Pi can be modified to reuse the analog video connector as an electrical S/PDIF output.
