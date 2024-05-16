@@ -17,6 +17,9 @@ install:
 	install -m644 bcm2708-i2s-spdif.ko /lib/modules/$(shell uname -r)/updates
 	depmod -a
 
+install_config:
+	install -m644 bcm2708-i2s-spdif.conf /etc/modprobe.d
+
 blacklist:
 	echo "blacklist snd_soc_bcm2835_i2s" > $(BLACKLIST_FILE)
 	chmod 644 $(BLACKLIST_FILE)

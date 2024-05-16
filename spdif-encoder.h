@@ -125,4 +125,8 @@ static inline void spdif_encode_frame_s16le(struct spdif_encoder *spdif,
 	spdif_encode_frame_generic(spdif, encoded, left, right);
 }
 
+static inline void spdif_encode_frame_zero(struct spdif_encoder *spdif, void *encoded) {
+	spdif_encode_frame_generic(spdif, encoded, 0, 0);
+}
+
 #endif
